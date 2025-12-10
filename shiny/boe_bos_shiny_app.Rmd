@@ -647,8 +647,12 @@ server <- function(input, output, session) {
       # 2. Render the analysis Rmd to a temporary PDF file
       tmp_pdf <- tempfile(fileext = ".pdf")
       
+      # Build the absolute path to the report Rmd:
+      # getwd() will be ".../SMS Grade Analysis"
+      report_path <- file.path(getwd(), "reports", "grade_analysis_report.Rmd")
+      
       rmarkdown::render(
-        input       = "../reports/grade_analysis_report.Rmd",  # For GitHub
+        input       = report_path, # For GitHub
         output_file = tmp_pdf,
         params      = list(data_path = tmp_rds),
         envir       = new.env(parent = globalenv())
