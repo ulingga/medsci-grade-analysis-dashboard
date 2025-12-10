@@ -648,7 +648,7 @@ server <- function(input, output, session) {
       tmp_pdf <- tempfile(fileext = ".pdf")
       
       rmarkdown::render(
-        input       = "grade_analysis_report.Rmd",  # File 2 name
+        input       = "../reports/grade_analysis_report.Rmd",  # For GitHub
         output_file = tmp_pdf,
         params      = list(data_path = tmp_rds),
         envir       = new.env(parent = globalenv())
