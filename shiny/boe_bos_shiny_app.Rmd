@@ -2,7 +2,7 @@
 title: "BoE / BoS Grade Analysis - Multi-paper Shiny"
 output: html_document
 runtime: shiny
-date: "2025-12-11"
+date: "`r Sys.Date()`"
 ---
 
 ```{r setup, include=FALSE}
