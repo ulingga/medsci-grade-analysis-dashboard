@@ -33,14 +33,10 @@ The project has two main components:
 .
 ├─ README.md
 ├─ .gitignore
-├─ R/                     # (optional) shared helper functions
 ├─ shiny/
 │  └─ boe_bos_shiny_app.Rmd       # Shiny ETL + UI + server
 ├─ reports/
 │  └─ grade_analysis_report.Rmd   # PDF analysis report
-├─ data/
-│  ├─ .gitignore                  # DO NOT COMMIT real data
-│  └─ README_data.md (optional)
-└─ docs/
-   └─ overview.md (optional)
+└─ data/
+   └─ .gitignore                  # DO NOT COMMIT real data
 
