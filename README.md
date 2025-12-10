@@ -28,26 +28,19 @@ The tool provides:
 .
 ├─ README.md
 ├─ .gitignore
-<<<<<<< HEAD
-=======
+├─ LICENSE
 ├─ SMS Grade Analysis.Rproj
->>>>>>> 9b56533 (Rewrote the README.md)
 ├─ shiny/
 │  └─ boe_bos_shiny_app.Rmd         # Shiny app (ETL + UI + report trigger)
 ├─ reports/
-<<<<<<< HEAD
-│  └─ grade_analysis_report.Rmd   # PDF analysis report
-└─ data/
-   └─ .gitignore                  # DO NOT COMMIT real data
-=======
 │  └─ grade_analysis_report.Rmd     # Parameterised RMarkdown PDF report
-├─ R/                               # (optional) shared helpers (ETL, plotting, etc.)
+├─ R/                               # (currently empty; reserved for future helpers)
 ├─ data/
 │  └─ .gitignore                    # ensures real data is never committed
 └─ docs/
-   ├─ README_academic.md            # user guide for academics
+   ├─ README_academic.md            # user guide for academics (local run)
    ├─ Developer_Guide.md            # architecture & dev notes
-   └─ DEPLOYMENT.md                 # instructions for deployment
+   └─ DEPLOYMENT.md                 # deployment options (Shiny server, Docker, etc.)
 ```
 
 ---
@@ -62,10 +55,10 @@ For academics or administrators comfortable with R/RStudio.
 install.packages(c(
   "shiny", "tidyverse", "readxl", "janitor", "stringr",
   "tools", "writexl", "dbplyr", "knitr", "tidyr",
-  "ggplot2", "purrr", "tibble", "shinyjs"
+  "ggplot2", "purrr", "tibble", "shinyjs", "rmarkdown"
 ))
 
-# If you are a PC user, for PDF output (LaTeX)
+# For PDF output (LaTeX)
 install.packages("tinytex")
 tinytex::install_tinytex()
 ```
@@ -93,9 +86,9 @@ Then:
 - **BoE/BoS PDF report**  
   via *Prepare analysis report → Download analysis report (PDF)*
 
-More details are available in:
+More detailed, step-by-step instructions (written for non-technical academics) are in:
 
-```
+```text
 docs/README_academic.md
 ```
 
@@ -104,44 +97,67 @@ docs/README_academic.md
 ## 3. For Developers & Maintainers
 
 - Architecture, ETL functions, and report logic:  
-  ```
+  ```text
   docs/Developer_Guide.md
   ```
 
-- Deployment instructions (UoA Shiny server, shinyapps.io, Docker):  
-  ```
+- Deployment instructions (UoA Shiny server, shinyapps.io, Docker, Dockerfile examples):  
+  ```text
   docs/DEPLOYMENT.md
   ```
+
+The `/R` folder is currently empty but reserved for future developers who may want to move ETL helper functions out of the Shiny document into standalone `.R` scripts.
 
 ---
 
 ## 4. Versioning & Releases
 
-This repository follows **semantic versioning**:
+This repository is intended to follow **semantic versioning**:
 
 - **v1.0.0** – first stable release for BoE/BoS (2025)  
 - **v1.1.0** – minor enhancements (new plots, extra tables)  
-- **v2.0.0** – major changes (new data model, new analysis modules)
+- **v2.0.0** – major changes (new data model, additional analyses, year-on-year comparisons)
 
 ### Creating a Release
 
 1. Ensure `main` is clean and working.  
-2. On GitHub: **Releases → Draft a new release**  
-3. Tag version (e.g., `v1.0.0`) and write release notes.  
-4. Academics may download the ZIP for that specific version.
+2. On GitHub: **Releases → Draft a new release**.  
+3. Tag the version (e.g. `v1.0.0`) and write release notes.  
+4. Academics can then download the ZIP for that specific version.
 
 ---
 
 ## 5. License
 
-Specify the appropriate license (MIT, GPL-3, or institutional) in the repository.
+This project is released under the **MIT License**.
+
+See the `LICENSE` file for full terms. In summary, others are permitted to:
+
+- Use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software  
+- Provided that the copyright and permission notice are included in all copies or substantial portions of the Software
 
 ---
 
 ## 6. Citation
 
-If used in academic reporting or internal documentation, cite as:
+If used in academic reporting or internal documentation, please cite as:
 
 > Li, E. (2025). *SMS Grade Analysis Dashboard: Shiny & RMarkdown workflow for BoE/BoS reporting* [Computer software]. GitHub.
->>>>>>> 9b56533 (Rewrote the README.md)
 
+---
+
+## 7. Getting Support
+
+At this stage, the SMS Grade Analysis Dashboard is not yet supported by School IT.  
+For unexpected behaviour, error messages, or questions about interpretation, please contact:
+
+- **Emily Li** (Developer)
+- **Jacqui Hannam** — *Associate Professor, SMS*
+
+Please provide:
+- A brief description of the issue  
+- A screenshot (if possible)  
+- The steps you took before the error appeared  
+- The relevant Canvas grade export file (if appropriate)
+
+This information helps us diagnose and reproduce the issue more easily.
