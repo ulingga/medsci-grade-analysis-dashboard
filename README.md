@@ -10,7 +10,7 @@ This repository contains an **R Shiny + RMarkdown** workflow to support **Board 
 The tool provides:
 
 - A **Shiny front-end** for academics to upload multiple Canvas grade exports and build a single canonical ETL table.
-- Downloadable **UG/PG wide Excel tables** for further analysis.
+- Downloadable **UG/PG wide Excel tables** for further review in the meetings.
 - An automated **BoE/BoS PDF report** with:
   - Enrolment and unique student counts by stage  
   - Per-paper summary statistics (mean, median, SD, fail %)  
