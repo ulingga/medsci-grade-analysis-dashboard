@@ -47,3 +47,18 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Prevent committing real student data
+data/*
+!data/.gitignore
+
+# Ignore knitted outputs
+*.pdf
+*.html
+*_cache/
+.cache/
+
+# RStudio junk
+.Rproj.user
+
+

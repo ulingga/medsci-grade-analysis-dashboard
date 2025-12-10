@@ -1,0 +1,1149 @@
+---
+title: "BoS Grade Analysis Report"
+output: pdf_document
+params:
+  data_path: NULL    # this will be filled in by Shiny (path to .rds ETL)
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+# Set options and load packages for the analysis report
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(stringr)
+library(tools)
+library(dbplyr)
+library(knitr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(tibble)
+```
+
+```{r load_data}
+# This chunk:
+# - loads the ETL data saved by the Shiny app
+# - stores it in all_grades, which you can use in the rest of the report
+
+# params$data_path is passed in from the Shiny app when it calls rmarkdown::render()
+all_grades <- readRDS(params$data_path)
+
+# Just in case, ensure we have the columns we expect
+# paper_code, student_name, student_id, unposted_final_score, unposted_final_grade
+#str(all_grades)
+```
+
+## Statistics of Papers
+
+### 1. Student counts
+
+```{r}
+library(dplyr)
+library(stringr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(knitr)
+
+# --------------------------------------------------------------------
+# 1. Prepare long dataset with numeric paper code
+# --------------------------------------------------------------------
+
+grades_for_summary <- all_grades %>%
+  mutate(
+    paper_num = as.integer(str_extract(paper_code, "\\d+"))
+  ) %>%
+  filter(!is.na(paper_num))
+
+# --------------------------------------------------------------------
+# 2. Unique student counts by stage
+# --------------------------------------------------------------------
+
+MEDSCI_142 <- grades_for_summary %>%
+  filter(paper_num == 142) %>%
+  distinct(student_id) %>% nrow()
+
+stage2_n <- grades_for_summary %>%
+  filter(paper_num >= 200, paper_num < 300) %>%
+  distinct(student_id) %>% nrow()
+
+stage3_n <- grades_for_summary %>%
+  filter(paper_num >= 300, paper_num < 400) %>%
+  distinct(student_id) %>% nrow()
+
+stage4_n <- grades_for_summary %>%
+  filter(paper_num >= 400, paper_num < 700) %>%
+  distinct(student_id) %>% nrow()
+
+ug_n <- grades_for_summary %>%
+  filter(paper_num < 700) %>%
+  distinct(student_id) %>% nrow()
+
+pg_n <- grades_for_summary %>%
+  filter(paper_num >= 700) %>%
+  distinct(student_id) %>% nrow()
+
+# --- Enrolments per stage/level ---
+
+MEDSCI_142_enrol <- grades_for_summary %>%
+  filter(paper_num == 142) %>%
+  nrow()
+
+stage2_enrol <- grades_for_summary %>%
+  filter(paper_num >= 200, paper_num < 300) %>%
+  nrow()
+
+stage3_enrol <- grades_for_summary %>%
+  filter(paper_num >= 300, paper_num < 400) %>%
+  nrow()
+
+stage4_enrol <- grades_for_summary %>%
+  filter(paper_num >= 400, paper_num < 700) %>%
+  nrow()
+
+ug_enrol <- grades_for_summary %>%
+  filter(paper_num < 700) %>%
+  nrow()
+
+pg_enrol <- grades_for_summary %>%
+  filter(paper_num >= 700) %>%
+  nrow()
+
+
+# --------------------------------------------------------------------
+# 3. Table 1: Unique Students & Enrolments by Stage
+# --------------------------------------------------------------------
+
+kable(
+  tibble(
+    Category = c(
+      "MEDSCI 142",
+      "Stage II",
+      "Stage III",
+      "Stage IV",
+      "Undergraduate (all <700)",
+      "Postgraduate (>=700)"
+    ),
+    `Unique Students` = c(MEDSCI_142, stage2_n, stage3_n, stage4_n, ug_n, pg_n),
+    Enrolments        = c(MEDSCI_142_enrol, stage2_enrol, stage3_enrol, stage4_enrol, ug_enrol, pg_enrol)
+  ),
+  caption = "Unique Students and Enrolments by Stage (S1&2 2025)"
+)
+
+# --------------------------------------------------------------------
+# 4. Table 2: Unique Students per UG paper
+# --------------------------------------------------------------------
+
+ug_per_paper <- grades_for_summary %>%
+  filter(paper_num < 700) %>%
+  group_by(paper_code) %>%
+  summarise(`Unique Students` = n_distinct(student_id), .groups = "drop") %>%
+  arrange(paper_code)
+
+kable(
+  ug_per_paper,
+  caption = "Unique Students per Paper (Undergrad, S1&2 2025)"
+)
+
+# --------------------------------------------------------------------
+# 5. Table 3: Unique Students per PG paper
+# --------------------------------------------------------------------
+
+pg_per_paper <- grades_for_summary %>%
+  filter(paper_num >= 700) %>%
+  group_by(paper_code) %>%
+  summarise(`Unique Students` = n_distinct(student_id), .groups = "drop") %>%
+  arrange(paper_code)
+
+kable(
+  pg_per_paper,
+  caption = "Unique Students per Paper (Postgrad, S1&2 2025)"
+)
+
+
+
+```
+
+### 2. Summary statistics per paper
+
+Mean, median, SD, min, max, fail%.
+
+Fail grades include **D+, D, D-, F, DNC, and DNS**.
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(knitr)
+library(purrr)
+
+#-----------------------------------------------------------
+# Define what counts as a fail grade: D+, D, D-, F, DNC, DNS
+#-----------------------------------------------------------
+is_fail_grade <- function(grade) {
+  grade_clean <- grade %>%
+    as.character() %>%
+    stringr::str_squish() %>%
+    stringr::str_to_upper()
+
+  grade_clean %in% c("D", "D+", "D-", "F", "DNC", "DNS")
+}
+
+# Round score to 2 decimals
+round2 <- function(x) round(x, 2)
+
+# Failed summary
+grades_base <- all_grades %>%
+  mutate(
+    paper_num = as.integer(str_extract(paper_code, "\\d+"))
+  ) %>%
+  filter(!is.na(paper_num)) %>%
+  group_by(student_id, student_name, paper_code, paper_num) %>%
+  summarise(
+    # Rule: use highest score across attempts. 
+    # If all scores are NA in this student-paper group, keep it as NA (not -Inf)
+    unposted_final_score = if (all(is.na(unposted_final_score))) {
+      NA_real_
+    } else {
+      max(unposted_final_score, na.rm = TRUE)
+    },
+    # if all NA, keep NA, otherwise first non-missing
+    unposted_final_grade = if (all(is.na(unposted_final_grade))) {
+      NA_character_
+    } else {
+      first(na.omit(unposted_final_grade))
+    },
+    .groups = "drop"
+  ) %>%
+  mutate(
+    level = if_else(paper_num < 700, "UG", "PG"),
+    stage = case_when(
+      paper_num == 142                   ~ "MEDSCI 142",
+      paper_num >= 200 & paper_num < 300 ~ "Stage II",
+      paper_num >= 300 & paper_num < 400 ~ "Stage III",
+      paper_num >= 400 & paper_num < 700 ~ "Stage IV",
+      paper_num >= 700                   ~ "Postgrad",
+      TRUE                               ~ "Other"
+    ),
+    is_fail = is_fail_grade(unposted_final_grade)
+  )
+
+# Internal summary 
+paper_summary_raw <- grades_base %>%
+  group_by(paper_code, level, stage) %>%
+  summarise(
+    n_students  = n_distinct(student_id),
+    mean_score  = mean(unposted_final_score, na.rm = TRUE),
+    median_score= median(unposted_final_score, na.rm = TRUE),
+    sd_score    = sd(unposted_final_score, na.rm = TRUE),
+    min_score   = min(unposted_final_score, na.rm = TRUE),
+    max_score   = max(unposted_final_score, na.rm = TRUE),
+    fail_n      = sum(is_fail, na.rm = TRUE),
+    fail_pct    = 100 * fail_n / n_students,
+    .groups     = "drop"
+  )
+
+# BoE-facing table: clean names, 2dp, no level/stage, no missing counts
+paper_summary_boe <- paper_summary_raw %>%
+  transmute(
+    Paper       = paper_code,
+    Students    = n_students,
+    Mean        = round2(mean_score),
+    Median      = round2(median_score),
+    SD          = round2(sd_score),
+    Min         = round2(min_score),
+    Max         = round2(max_score),
+    `Fail (n)`  = fail_n,
+    `Fail (%)`  = round2(fail_pct)
+  ) %>%
+  arrange(Paper)
+
+kable(
+  paper_summary_boe,
+  caption = "Summary Statistics per Paper (S1&2 2025)"
+)
+
+```
+
+
+### 3. Stage-level summary
+```{r}
+
+stage_summary_boe <- grades_base %>%
+  group_by(stage) %>%
+  summarise(
+    Enrolments = n(),  # total student-paper rows in this stage
+    Mean       = round2(mean(unposted_final_score, na.rm = TRUE)),
+    Median     = round2(median(unposted_final_score, na.rm = TRUE)),
+    SD         = round2(sd(unposted_final_score, na.rm = TRUE)),
+    `Fail (n)` = sum(is_fail, na.rm = TRUE),
+    `Fail (%)`= round2(100 * `Fail (n)` / Enrolments),
+    .groups    = "drop"
+  ) %>%
+  arrange(stage)
+
+kable(
+  stage_summary_boe,
+  caption = "Summary Statistics by Stage (S1&2 2025, by Enrolments)"
+)
+
+
+```
+
+
+### 4. Table of students with DNC / DNS outcomes
+
+```{r dnc-dns-by-stage, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Base: all rows where grade is DNC or DNS
+dnc_dns_base <- grades_base %>%
+  mutate(
+    grade_clean = unposted_final_grade %>%
+      as.character() %>%
+      str_squish() %>%
+      str_to_upper()
+  ) %>%
+  filter(grade_clean %in% c("DNC", "DNS"))
+
+# Helper to build one table (any stage filter applied before calling this)
+make_dnc_dns_tbl <- function(df) {
+  if (nrow(df) == 0) return(NULL)
+  
+  df %>%
+    group_by(student_id, student_name) %>%
+    summarise(
+      DNC_papers = paste(
+        sort(unique(paper_code[grade_clean == "DNC"])),
+        collapse = ", "
+      ),
+      DNS_papers = paste(
+        sort(unique(paper_code[grade_clean == "DNS"])),
+        collapse = ", "
+      ),
+      .groups = "drop"
+    ) %>%
+    # Turn empty strings into "-" for cleaner display
+    mutate(
+      DNC_papers = ifelse(DNC_papers == "", "-", DNC_papers),
+      DNS_papers = ifelse(DNS_papers == "", "-", DNS_papers)
+    ) %>%
+    # Nice column names + ordering
+    transmute(
+      #`Student Name` = student_name,
+      `Student ID`   = student_id,
+      `DNC papers`   = DNC_papers,
+      `DNS papers`   = DNS_papers
+    ) %>%
+    arrange(`Student ID`)
+}
+
+# ---------- Stage II ----------
+dnc_dns_stage2 <- dnc_dns_base %>%
+  filter(stage == "Stage II") %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_stage2)) {
+  cat("No Stage II students with DNC or DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_stage2,
+    caption = "Students with DNC / DNS Outcomes - Stage II (by Paper)",
+    align   = "llcc"
+  )
+}
+
+# ---------- Stage III & IV ----------
+dnc_dns_stage34 <- dnc_dns_base %>%
+  filter(stage %in% c("Stage III", "Stage IV")) %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_stage34)) {
+  cat("No Stage III or IV students with DNC or DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_stage34,
+    caption = "Students with DNC / DNS Outcomes - Stage III & IV (by Paper)",
+    align   = "llcc"
+  )
+}
+
+# ---------- Postgraduate ----------
+dnc_dns_pg <- dnc_dns_base %>%
+  filter(stage == "Postgrad") %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_pg)) {
+  cat("No Postgraduate students with DNC or DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_pg,
+    caption = "Students with DNC / DNS Outcomes - Postgraduate (by Paper)",
+    align   = "llcc"
+  )
+}
+```
+
+
+```{r dnc-dns-by-stage_2, include=FALSE, message=FALSE, warning=FALSE}
+
+# Base: all rows where grade is DNC or DNS
+dnc_dns_base <- grades_base %>%
+  mutate(
+    grade_clean = unposted_final_grade %>%
+      as.character() %>%
+      str_squish() %>%
+      str_to_upper()
+  ) %>%
+  filter(grade_clean %in% c("DNC", "DNS"))
+
+# Helper to build one table (any stage filter applied before calling this)
+# Now restricted to students with TOTAL DNC+DNS >= 2
+make_dnc_dns_tbl <- function(df) {
+  if (nrow(df) == 0) return(NULL)
+  
+  out <- df %>%
+    group_by(student_id, student_name) %>%
+    summarise(
+      n_DNC = sum(grade_clean == "DNC"),
+      n_DNS = sum(grade_clean == "DNS"),
+      total_DNC_DNS = n_DNC + n_DNS,
+      DNC_papers = paste(
+        sort(unique(paper_code[grade_clean == "DNC"])),
+        collapse = ", "
+      ),
+      DNS_papers = paste(
+        sort(unique(paper_code[grade_clean == "DNS"])),
+        collapse = ", "
+      ),
+      .groups = "drop"
+    ) %>%
+    # Keep only students with >= 2 DNC/DNS in total
+    filter(total_DNC_DNS >= 2) %>%
+    # Turn empty strings into "-" for cleaner display
+    mutate(
+      DNC_papers = ifelse(DNC_papers == "", "-", DNC_papers),
+      DNS_papers = ifelse(DNS_papers == "", "-", DNS_papers)
+    ) %>%
+    transmute(
+      # `Student Name` = student_name,   # uncomment if you want names
+      `Student ID`   = student_id,
+      `DNC papers`   = DNC_papers,
+      `DNS papers`   = DNS_papers
+    ) %>%
+    arrange(`Student ID`)
+  
+  if (nrow(out) == 0) return(NULL) else out
+}
+
+# ---------- Stage II ----------
+dnc_dns_stage2 <- dnc_dns_base %>%
+  filter(stage == "Stage II") %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_stage2)) {
+  cat("No Stage II students with >= 2 DNC/DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_stage2,
+    caption = "Students with >= 2 DNC / DNS Outcomes - Stage II (by Paper)",
+    align   = "llcc"
+  )
+}
+
+# ---------- Stage III & IV ----------
+dnc_dns_stage34 <- dnc_dns_base %>%
+  filter(stage %in% c("Stage III", "Stage IV")) %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_stage34)) {
+  cat("No Stage III or IV students with >= 2 DNC/DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_stage34,
+    caption = "Students with >= 2 DNC / DNS Outcomes - Stage III & IV (by Paper)",
+    align   = "llcc"
+  )
+}
+
+# ---------- Postgraduate ----------
+dnc_dns_pg <- dnc_dns_base %>%
+  filter(stage == "Postgrad") %>%
+  make_dnc_dns_tbl()
+
+if (is.null(dnc_dns_pg)) {
+  cat("No Postgraduate students with >= 2 DNC/DNS grades in the current ETL.\n\n")
+} else {
+  kable(
+    dnc_dns_pg,
+    caption = "Students with >= 2 DNC / DNS Outcomes - Postgraduate (by Paper)",
+    align   = "llcc"
+  )
+}
+```
+
+## Visualisation
+
+### 1. Boxplots with outlier students
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(purrr)
+
+# Helper: flag outliers per paper based on 1.5*IQR rule
+flag_outliers <- function(df) {
+  df %>%
+    group_by(Paper) %>%
+    mutate(
+      Q1 = quantile(Score, 0.25, na.rm = TRUE),
+      Q3 = quantile(Score, 0.75, na.rm = TRUE),
+      IQR = Q3 - Q1,
+      lower = Q1 - 1.5 * IQR,
+      upper = Q3 + 1.5 * IQR,
+      is_outlier = Score < lower | Score > upper
+    ) %>%
+    ungroup()
+}
+
+
+# -------------------------------------------------
+# 1. Build common plotting dataset
+# -------------------------------------------------
+plot_dat <- grades_base %>%
+  mutate(
+    Paper      = paper_code,
+    Score      = unposted_final_score,
+    prefix     = case_when(
+      str_detect(Paper, "^MEDIMAGE") ~ "MEDIMAGE",
+      str_detect(Paper, "^CLINIMAG") ~ "CLINIMAG",
+      TRUE                            ~ "OTHER"
+    ),
+    stage_group = case_when(
+      paper_num >= 200 & paper_num < 300 ~ "Stage II",
+      paper_num >= 300 & paper_num < 400 ~ "Stage III",
+      paper_num >= 400 & paper_num < 700 ~ "Stage IV",
+      paper_num >= 700                   ~ "Postgrad",
+      TRUE                               ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(Score))
+
+# -------------------------------------------------
+# 2. Helper: get paper order MEDIMAGE > CLINIMAG > OTHER
+# -------------------------------------------------
+get_paper_order <- function(dat) {
+  dat %>%
+    distinct(Paper, prefix, paper_num) %>%
+    arrange(factor(prefix, levels = c("MEDIMAGE", "CLINIMAG", "OTHER")), paper_num) %>%
+    pull(Paper)
+}
+
+# -------------------------------------------------
+# 3. Helper: boxplot with n annotations
+# -------------------------------------------------
+plot_stage_box <- function(dat, title_text) {
+  if (nrow(dat) == 0) return(NULL)
+
+  # Order papers: MEDIMAGE first, then CLINIMAG, then others
+  paper_order <- get_paper_order(dat)
+
+  dat <- dat %>%
+    mutate(Paper = factor(Paper, levels = paper_order))
+
+  # n per paper & annotation y position
+  count_tbl <- dat %>%
+    group_by(Paper) %>%
+    summarise(
+      n         = n(),
+      max_score = max(Score, na.rm = TRUE),
+      .groups   = "drop"
+    ) %>%
+    mutate(y_annot = max_score + 2)
+
+  y_min <- min(dat$Score, na.rm = TRUE)
+  y_max_annot <- max(count_tbl$y_annot, na.rm = TRUE)
+
+  ggplot(dat, aes(x = Paper, y = Score, fill = Paper)) +
+    geom_boxplot(outlier.colour = "red", na.rm = TRUE) +
+    geom_text(
+      data = count_tbl,
+      aes(x = Paper, y = y_annot, label = paste0("n=", n)),
+      inherit.aes = FALSE,
+      size = 3.8
+    ) +
+    coord_cartesian(ylim = c(y_min, y_max_annot + 1)) +
+    labs(
+      title = title_text,
+      x = "Paper",
+      y = "Score"
+    ) +
+    theme_minimal() +
+    guides(fill = "none")
+}
+
+# -------------------------------------------------
+# 4. Draw plots
+# -------------------------------------------------
+
+# Stage II
+stage2_dat <- plot_dat %>%
+  filter(stage_group == "Stage II")%>%
+  flag_outliers()
+
+plot_stage_box(stage2_dat, "Score Distribution - Stage II (S1&2 2025)")
+
+# Stage III & Stage IV combined
+stage34_dat <- plot_dat %>%
+  filter(stage_group %in% c("Stage III", "Stage IV"))%>%
+  flag_outliers()
+
+plot_stage_box(stage34_dat, "Score Distribution - Stage III (S1&2 2025)") +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1)
+    )
+
+# Postgraduate
+pg_dat <- plot_dat %>%
+  filter(stage_group == "Postgrad")%>%
+  flag_outliers()
+
+plot_stage_box(pg_dat, "Score Distribution - Postgraduate (S1&2 2025)") +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1)
+    )
+
+```
+
+### 2. Outlier students
+```{r}
+# Stage II outlier students
+stage2_outliers_tbl <- stage2_dat %>%
+  filter(is_outlier) %>%
+  arrange(Paper, desc(Score)) %>%
+  transmute(
+    Paper        = Paper,
+    `Student ID` = student_id,
+    #Student_Name = student_name,
+    Score        = round2(Score),
+    Grade        = unposted_final_grade
+  )
+
+if (nrow(stage2_outliers_tbl) == 0) {
+  cat("No outlier students in current Stage II papers.\n\n")
+} else {
+  kable(
+    stage2_outliers_tbl,
+    caption = "Outlier Scores - Stage II Papers (S1&2 2025)"
+  )
+}
+
+# Stage III & IV outlier students
+stage34_outliers_tbl <- stage34_dat %>%
+  filter(is_outlier) %>%
+  arrange(Paper, desc(Score)) %>%
+  transmute(
+    Paper        = Paper,
+    `Student ID` = student_id,
+    #Student_Name = student_name,
+    Score        = round2(Score),
+    Grade        = unposted_final_grade
+  )
+
+if (nrow(stage34_outliers_tbl) == 0) {
+  cat("No outlier students in current Stage III / IV papers.\n\n")
+} else {
+  kable(
+    stage34_outliers_tbl,
+    caption = "Outlier Scores - Stage III / IV Papers (S1&2 2025)"
+  )
+}
+
+# Postgraduate outlier students
+pg_outliers_tbl <- pg_dat %>%
+  filter(is_outlier) %>%
+  arrange(Paper, desc(Score)) %>%
+  transmute(
+    Paper        = Paper,
+    `Student ID` = student_id,
+    #Student_Name = student_name,
+    Score        = round2(Score),
+    Grade        = unposted_final_grade
+  )
+
+if (nrow(pg_outliers_tbl) == 0) {   # <-- fixed object name here
+  cat("No outlier students in current Postgraduate papers.\n\n")
+} else {
+  kable(
+    pg_outliers_tbl,
+    caption = "Outlier Scores - Postgraduate Papers (S1&2 2025)"
+  )
+}
+
+```
+
+
+### 3. Density plots for distribution
+
+```{r}
+density_data <- grades_base %>%
+  mutate(
+    Paper = paper_code,
+    stage_group = case_when(
+      paper_num >= 200 & paper_num < 300 ~ "Stage II",
+      paper_num >= 300 & paper_num < 400 ~ "Stage III",
+      paper_num >= 400 & paper_num < 700 ~ "Stage IV",
+      paper_num >= 700                   ~ "Postgraduate",
+      TRUE                               ~ "Other"
+    )
+  ) %>%
+  filter(stage_group != "Other")
+
+```
+
+```{r}
+# Stage II density plot (per paper)
+stage2_density <- density_data %>%
+  filter(stage_group == "Stage II")
+
+# Plot only when we have Stage II papers
+if (nrow(stage2_density) == 0) {
+  cat("No Stage II papers available for density plot.\n\n")
+} else {
+  ggplot(stage2_density, aes(x = unposted_final_score, fill = Paper, colour = Paper)) +
+    geom_density(alpha = 0.18, adjust = 1) +
+    labs(
+      title = "Score Distributions - Stage II Papers (S1&2 2025)",
+      x = "Score",
+      y = "Density",
+      colour = "Paper",
+      fill   = "Paper"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+```
+
+```{r}
+# Stage III & Stage IV combined
+stage34_density <- density_data %>%
+  filter(stage_group %in% c("Stage III", "Stage IV"))
+
+if (nrow(stage34_density) == 0) {
+  cat("No Stage III / IV papers available for density plot.\n\n")
+} else {
+  ggplot(stage34_density, aes(x = unposted_final_score, fill = Paper, colour = Paper)) +
+    geom_density(alpha = 0.18, adjust = 1) +
+    labs(
+      title = "Score Distributions - Stage III / IV Papers (S1&2 2025)",
+      x = "Score",
+      y = "Density",
+      colour = "Paper",
+      fill   = "Paper"
+      ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+```
+
+```{r}
+# Postgrad (PG) density per paper
+pg_density <- density_data %>%
+  filter(stage_group == "Postgraduate")
+
+if (nrow(pg_density) == 0) {
+  cat("No Postgraduate papers available for density plot.\n\n")
+} else {
+  ggplot(pg_density, aes(x = unposted_final_score, fill = Paper, colour = Paper)) +
+    geom_density(alpha = 0.18, adjust = 1) +
+    labs(
+      title = "Score Distributions - Postgraduate Papers (S1&2 2025)",
+      x = "Score",
+      y = "Density",
+      colour = "Paper",
+      fill   = "Paper"
+      ) +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          legend.text = element_text(size = 7),
+          legend.title = element_text(size = 8))
+}
+
+```
+
+
+```{r}
+# Density plot by Stage
+ggplot(density_data, aes(x = unposted_final_score, colour = stage_group, fill = stage_group)) +
+  geom_density(alpha = 0.15, adjust = 1) +
+  labs(
+    title = "Score Distributions by Stage (S1&2 2025)",
+    x = "Score",
+    y = "Density",
+    colour = "Stage",
+    fill   = "Stage"
+  ) +
+  theme_minimal()
+
+```
+
+## Paire t-tests between papers + Visualisation of the results
+
+**Paired Mean Difference Analysis Between Papers**
+
+To understand how students performed across related papers, we conducted a paired mean difference analysis. 
+
+This compares the performance of the same students across two papers, which controls for differences in cohort strength and individual ability. This provides a fairer comparison than simply comparing overall averages.
+
+For each pair of undergraduate papers:
+
+* We identified students who took both papers.
+
+* If at least 20 students overlapped (to ensure stability), we ran a paired t-test comparing their scores.
+
+* We calculated the mean score difference (Paper1 - Paper2), 95\% confidence interval, and p-value to assess whether the difference is statistically meaningful.
+
+**How to interpret the plot**
+
+* **Positive values** --> students, on average, scored higher in Paper 1.
+
+* **Negative values** -->  students scored higher in Paper 2.
+
+* Error bars show the 95\% confidence interval.
+
+* The dashed vertical line at 0 represents “no difference”.
+
+* Results highlighted as Significant indicate differences unlikely due to chance.
+
+**Purpose**
+
+This analysis helps the Board identify:
+
+* Whether certain papers are consistently more challenging
+
+* Whether observed score differences may reflect assessment difficulty rather than cohort characteristics
+
+* Papers that may benefit from closer review or calibration
+
+Only pairs with sufficient shared enrolment (>= 20 students) were included, and results should be interpreted alongside course-level context and academic judgement.
+
+
+### Paire t-tests for UG papers (>= 20 students)
+
+```{r}
+# Long data: UG scores
+ug_scores_long <- grades_base %>%
+  filter(level == "UG") %>%
+  select(student_id, Paper = paper_code, Score = unposted_final_score) %>%
+  filter(!is.na(Score))
+
+# If there are fewer than 2 UG papers, no point continuing
+if (n_distinct(ug_scores_long$Paper) < 2) {
+  warning("Not enough UG papers to perform paired comparisons.")
+  ttest_results_ci <- tibble::tibble()  # empty placeholder
+} else {
+
+  # All unique UG papers
+  ug_papers <- sort(unique(ug_scores_long$Paper))
+
+  # All unique pairs of papers
+  pairs_mat <- t(combn(ug_papers, 2))
+  pairs_to_test <- as_tibble(pairs_mat) %>%
+    rename(Paper1 = V1, Paper2 = V2)
+
+  # Run paired t-tests where n >= 20
+  results_list <- vector("list", nrow(pairs_to_test))
+
+  for (i in seq_len(nrow(pairs_to_test))) {
+    p1 <- pairs_to_test$Paper1[i]
+    p2 <- pairs_to_test$Paper2[i]
+
+    both_scores <- ug_scores_long %>%
+      filter(Paper %in% c(p1, p2)) %>%
+      pivot_wider(
+        names_from   = Paper,
+        values_from  = Score,
+        names_prefix = "Score_"
+      ) %>%
+      filter(
+        !is.na(.data[[paste0("Score_", p1)]]) &
+        !is.na(.data[[paste0("Score_", p2)]])
+      )
+
+    # Only test if there are at least 20 paired students
+    if (nrow(both_scores) >= 20) {
+      test <- t.test(
+        both_scores[[paste0("Score_", p1)]],
+        both_scores[[paste0("Score_", p2)]],
+        paired = TRUE
+      )
+
+      results_list[[i]] <- tibble::tibble(
+        Paper1    = p1,
+        Paper2    = p2,
+        n         = nrow(both_scores),
+        Mean_Diff = mean(
+          both_scores[[paste0("Score_", p1)]] -
+          both_scores[[paste0("Score_", p2)]],
+          na.rm = TRUE
+        ),
+        CI_Lower  = test$conf.int[1],
+        CI_Upper  = test$conf.int[2],
+        p_value   = unname(test$p.value)
+      )
+    } else {
+      results_list[[i]] <- NULL
+    }
+  }
+
+  # Compact NULLs, then bind
+  ttest_results_ci <- results_list %>%
+    compact() %>%
+    bind_rows()
+}
+
+# ---- Handle "no valid pairs" case safely ----
+if (nrow(ttest_results_ci) == 0) {
+  warning("No UG paper pairs had at least 20 shared students. Paired t-tests were not performed.")
+  # Optionally print a message into the knitted report:
+  cat("No UG paper pairs had at least 20 shared students in S1&2 2025, so paired t-tests were not performed.\n")
+} else {
+
+  ttest_results_ci <- ttest_results_ci %>%
+    mutate(
+      Pair = paste(Paper1, "vs", Paper2),
+      Sig  = ifelse(p_value < 0.05, "Significant", "Not Significant")
+    ) %>%
+    arrange(Mean_Diff)
+}
+
+```
+
+```{r fig.height=12, fig.width=8}
+
+# Only plot if results exist
+if (exists("ttest_results_ci") &&
+    nrow(ttest_results_ci) > 0) {
+  
+  # Derive 200-level vs 300-level groups for each pair
+  ttest_results_ci_plot <- ttest_results_ci %>%
+    mutate(
+      Paper1_num = as.integer(str_extract(Paper1, "\\d+")),
+      Paper2_num = as.integer(str_extract(Paper2, "\\d+")),
+      Level = case_when(
+        Paper1_num >= 200 & Paper1_num < 300 &
+          Paper2_num >= 200 & Paper2_num < 300 ~ "Stage II Papers",
+        Paper1_num >= 300 & Paper1_num < 400 &
+          Paper2_num >= 300 & Paper2_num < 400 ~ "Stage III Papers",
+        TRUE ~ NA_character_   # mixed / other levels
+      )
+    ) %>%
+    filter(!is.na(Level))
+
+  if (nrow(ttest_results_ci_plot) == 0) {
+    cat("No Stegae II or Stage III paper pairs with >=20 overlapping students for paired t-test visualisation.\n")
+  } else {
+    ggplot(ttest_results_ci_plot,
+           aes(x = reorder(Pair, Mean_Diff), y = Mean_Diff, fill = Sig)) +
+      geom_col() +
+      geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), width = 0.2) +
+      coord_flip() +
+      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+      labs(
+        title    = "Mean Score Differences Between Paired UG Papers (S1&2 2025)",
+        subtitle = "Faceted by Stage II vs Stage III\nPositive = Paper1 higher; Negative = Paper2 higher\nOnly pairs with >=20 common students included",
+        x        = "Paper Pair",
+        y        = "Mean Difference (Paper1 - Paper2)"
+      ) +
+      scale_fill_manual(values = c("Significant" = "#377EB8", "Not Significant" = "#999999")) +
+      facet_wrap(~ Level, ncol = 1, scales = "free_y") +
+      theme_minimal() +
+      theme(legend.position = "bottom")+
+      theme(plot.margin = margin(10, 10, 10, 30)
+      )
+  }
+} else {
+  cat("No UG paper pairs had >= 20 shared students, so no paired t-test visualisation is shown.\n")
+}
+
+# ---- Print the table used for the plot ----
+if (exists("ttest_results_ci_plot") &&
+    nrow(ttest_results_ci_plot) > 0) {
+
+  ttest_level_table <- ttest_results_ci_plot %>%
+    transmute(
+      Level        = Level,
+      Pair         = Pair,
+      Mean_Diff    = round(Mean_Diff, 2),
+      `95% CI`     = paste0(
+        round(CI_Lower, 2), " to ", round(CI_Upper, 2)
+      ),
+      n            = n,
+      Significance = Sig
+    ) %>%
+    arrange(Level, desc(abs(Mean_Diff)))
+
+  kable(
+    ttest_level_table,
+    caption = "Paired UG Paper Comparisons (Stage II and Stage III Papers Only)",
+    align = c("l", "l", "c", "l", "c", "c")
+  )
+} else {
+  cat("No UG paper pairs had >= 20 shared students, so paired t-tests were not performed.\n")
+}
+
+```
+
+
+### Paire t-tests for PG papers (>= 20 students)
+
+```{r pg-ttests, echo=FALSE, message=FALSE, warning=FALSE}
+# Long data: PG scores
+pg_scores_long <- grades_base %>%
+  filter(level == "PG") %>%
+  select(student_id, Paper = paper_code, Score = unposted_final_score) %>%
+  filter(!is.na(Score))
+
+# If fewer than 2 PG papers, nothing to compare
+if (n_distinct(pg_scores_long$Paper) < 2) {
+  
+  pg_ttest_results_ci <- tibble::tibble()
+  cat("No valid PG paper pairs available for paired comparisons (fewer than 2 PG papers).\n")
+  
+} else {
+
+  # All unique PG papers
+  pg_papers <- sort(unique(pg_scores_long$Paper))
+
+  # All unique pairs of PG papers
+  pairs_mat_pg <- t(combn(pg_papers, 2))
+  pairs_to_test_pg <- tibble::as_tibble(pairs_mat_pg) %>%
+    rename(Paper1 = V1, Paper2 = V2)
+
+  # Run paired t-tests where n >= 20
+  results_list_pg <- vector("list", nrow(pairs_to_test_pg))
+
+  for (i in seq_len(nrow(pairs_to_test_pg))) {
+    p1 <- pairs_to_test_pg$Paper1[i]
+    p2 <- pairs_to_test_pg$Paper2[i]
+
+    both_scores_pg <- pg_scores_long %>%
+      filter(Paper %in% c(p1, p2)) %>%
+      pivot_wider(
+        names_from   = Paper,
+        values_from  = Score,
+        names_prefix = "Score_"
+      ) %>%
+      filter(
+        !is.na(.data[[paste0("Score_", p1)]]) &
+        !is.na(.data[[paste0("Score_", p2)]])
+      )
+
+    # Only test if there are at least 20 paired students
+    if (nrow(both_scores_pg) >= 20) {
+      test_pg <- t.test(
+        both_scores_pg[[paste0("Score_", p1)]],
+        both_scores_pg[[paste0("Score_", p2)]],
+        paired = TRUE
+      )
+
+      results_list_pg[[i]] <- tibble::tibble(
+        Paper1    = p1,
+        Paper2    = p2,
+        n         = nrow(both_scores_pg),
+        Mean_Diff = mean(
+          both_scores_pg[[paste0("Score_", p1)]] -
+          both_scores_pg[[paste0("Score_", p2)]],
+          na.rm = TRUE
+        ),
+        CI_Lower  = test_pg$conf.int[1],
+        CI_Upper  = test_pg$conf.int[2],
+        p_value   = unname(test_pg$p.value)
+      )
+    } else {
+      results_list_pg[[i]] <- NULL
+    }
+  }
+
+  # Compact NULLs and bind
+  pg_ttest_results_ci <- results_list_pg %>%
+    compact() %>%
+    bind_rows()
+
+  if (nrow(pg_ttest_results_ci) == 0) {
+    cat("No PG paper pairs had >= 20 shared students, so paired t-tests were not performed.\n")
+  } else {
+    pg_ttest_results_ci <- pg_ttest_results_ci %>%
+      mutate(
+        Pair = paste(Paper1, "vs", Paper2),
+        Sig  = ifelse(p_value < 0.05, "Significant", "Not Significant")
+      ) %>%
+      arrange(Mean_Diff)
+
+    # Minimal PG table
+    pg_ttest_results_clean <- pg_ttest_results_ci %>%
+      transmute(
+        Pair,
+        Mean_Diff    = round(Mean_Diff, 2),
+        `95% CI`     = paste0(
+          round(CI_Lower, 2), " to ", round(CI_Upper, 2)
+          ),
+        n            = n,
+        Significance = Sig
+      ) %>%
+      arrange(desc(abs(Mean_Diff)))
+  }
+}
+
+```
+
+
+```{r pg-ttests-plot, echo=FALSE, message=FALSE, warning=FALSE}
+
+## 2️⃣ PG visualisation (only if results exist)
+
+if (exists("pg_ttest_results_ci") && nrow(pg_ttest_results_ci) > 0) {
+
+  print(
+    ggplot(pg_ttest_results_ci,
+           aes(x = reorder(Pair, Mean_Diff), y = Mean_Diff, fill = Sig)) +
+      geom_col() +
+      geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), width = 0.2) +
+      coord_flip() +
+      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+      labs(
+        title    = "Mean Score Differences Between Paired PG Papers (S1&2 2025)",
+        subtitle = "Positive = Paper1 higher; Negative = Paper2 higher\nOnly pairs with >= 20 common students included",
+        x        = "Paper Pair",
+        y        = "Mean Difference (Paper1 - Paper2)"
+      ) +
+      scale_fill_manual(values = c("Significant" = "#377EB8", "Not Significant" = "#999999")) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.title.position = "plot",
+            plot.title = element_text(hjust = 0),
+            plot.subtitle = element_text(hjust = 0))
+  )
+
+  # ---- Table shown AFTER the visualisation ----
+  if (exists("pg_ttest_results_clean") &&
+      nrow(pg_ttest_results_clean) > 0) {
+    knitr::kable(
+      pg_ttest_results_clean,
+      caption = "Paired Mean Difference Summary Between PG Paper Pairs (S1&2 2025)"
+    )
+  } else {
+    cat("No PG paper pairs had >= 20 shared students, so paired t-test summary table is not shown.\n")
+  }
+
+} else {
+  cat("No PG paper pairs had >= 20 shared students, so no paired t-test visualisation is shown.\n")
+}
+
+
+```

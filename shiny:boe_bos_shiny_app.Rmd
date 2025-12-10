@@ -1,0 +1,669 @@
+---
+title: "BoE / BoS Grade Analysis - Multi-paper Shiny"
+output: html_document
+runtime: shiny
+date: "2025-12-11"
+---
+
+```{r setup, include=FALSE}
+# This chunk runs once when the document starts.
+# It sets global options and loads the R packages we need.
+# You can change the setup according to your needs
+
+knitr::opts_chunk$set(
+  echo    = FALSE,   # Don't show code by default in the output
+  warning = FALSE,   # Hide warnings in the output
+  message = FALSE    # Hide package startup messages
+)
+
+
+# ---------------------------------------------------------------------
+# PC USERS PLEASE RUN THE FOLLOWING CODE IN CONSOLE:
+#
+# Copy the following two lines (without the # in the front) in Console
+# 
+# install.packages("tinytex")
+# tinytex::install_tinytex()
+# ---------------------------------------------------------------------
+
+
+
+# --------------------------------------------------------------------------
+# Please install packages if you don't have any of below in your environment
+# 
+# Copy the install.packages() below and run in Console if needed
+# --------------------------------------------------------------------------
+
+# install.packages("shiny") 
+# install.packages("tidyverse")
+# install.packages("readxl")
+# install.packages("janitor")
+# install.packages("stringr")
+# install.packages("tools")
+# install.packages("writexl")
+
+library(shiny) # R Shiny for the front end
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(stringr)
+library(tools)
+library(writexl)
+
+```
+
+```{r}
+# This chunk defines the core ETL functions.
+# These functions are REUSED by Shiny every time an academic uploads a file.
+
+# --------------------------------------------------------------------------
+# Step 0: Define Function to process raw files into one canonical long table
+# --------------------------------------------------------------------------
+
+# -------------------------------------------
+# Function 1: Read file (excel and csv files)
+# -------------------------------------------
+
+# Input: path to the file on disk
+# Output: raw data frame (no cleaning yet)
+
+read_canvas_file <- function(path) {
+  file_ext <- tolower(tools::file_ext(path))
+  # If it's a CSV, use read_csv()
+  if (file_ext == "csv") {
+    df <- readr::read_csv(path, show_col_types = FALSE)
+    # If it's an Excel file, use read_excel()
+  } else if (file_ext %in% c("xls", "xlsx")) {
+    df <- readxl::read_excel(path)
+    # Otherwise, stop with an error message
+  } else {
+stop(paste("File type not supported:", file_ext))
+}
+
+df
+}
+
+
+# ------------------------------------------------------
+# Function 2: Clean & standardise to one long-ish schema
+# ------------------------------------------------------
+
+clean_canvas_grades <- function(df, paper_code) {
+  df %>%
+    # make names lower_snake_case, so case/spacing doesn’t matter
+    clean_names() %>%
+    
+    # select the core columns in a canonical way (Canvas naming)
+    select(
+      student_name         = student,
+      student_id           = sis_user_id,
+      unposted_final_score = unposted_final_score,
+      unposted_final_grade = unposted_final_grade
+    ) %>%
+    
+    # Drop rows with missing / blank student_id & student_name 
+    # (test student rows etc.) 
+    filter(
+      !is.na(student_id)   & student_id   != "",
+      !is.na(student_name) & student_name != ""
+      ) %>%
+    
+    # fix types and add paper_code
+    mutate(
+      student_id = as.character(student_id), 
+      unposted_final_score = as.numeric(unposted_final_score), 
+      unposted_final_score = round(unposted_final_score, 2), 
+      # Add the paper_code column (e.g. "MEDIMAGE_305")
+      paper_code = paper_code,
+      # paper_code in the front
+      .before = 1
+    )
+}
+
+# 3. One wrapper per file
+
+process_one_file <- function(path, paper_code) {
+  raw <- read_canvas_file(path) 
+  clean <- clean_canvas_grades(raw, paper_code) 
+  clean }
+```
+
+```{r long_to_wide_helpers}
+# This chunk defines helper functions to go from:
+#   all_grades (long, multiple attempts possible)
+# → grades_long_unique (one row per student-paper)
+# → UG wide (all UG papers)
+# → PG wide (all PG papers)
+
+# Helper: create grades_long_unique from the full long ETL
+make_grades_long_unique <- function(all_grades) {
+  # Start from long ETL and extract numeric paper number, e.g. "MEDSCI_318" -> 318
+  grades_long <- all_grades %>%
+    mutate(
+      paper_num = str_extract(paper_code, "\\d+"),
+      paper_num = as.integer(paper_num)
+    )
+  
+  # Collapse multiple attempts per student-paper into one row:
+  # - use highest score
+  # - take first non-missing grade
+  grades_long_unique <- grades_long %>%
+    group_by(student_id, student_name, paper_code, paper_num) %>%
+    summarise(
+      unposted_final_score = if (all(is.na(unposted_final_score))) {
+        NA_real_
+      } else {
+        max(unposted_final_score, na.rm = TRUE)
+      },
+      unposted_final_grade = if (all(is.na(unposted_final_grade))) {
+        NA_character_
+      } else {
+        dplyr::first(na.omit(unposted_final_grade))
+      },
+      .groups = "drop"
+    )
+  
+  grades_long_unique
+}
+
+# Helper: from grades_long_unique → UG/PG wide tibbles
+make_ug_pg_wide <- function(grades_long_unique) {
+  # UG = papers with paper_num < 700
+  ug_long <- grades_long_unique %>%
+    filter(paper_num < 700)
+  
+  # PG = papers with paper_num >= 700
+  pg_long <- grades_long_unique %>%
+    filter(paper_num >= 700)
+  
+  # ----- Build UG wide (if there are any UG rows) -----
+  if (nrow(ug_long) > 0) {
+    ug_wide <- ug_long %>%
+      select(
+        student_id,
+        student_name,
+        paper_code,
+        unposted_final_grade,
+        unposted_final_score
+      ) %>%
+      pivot_wider(
+        id_cols     = c(student_id, student_name),
+        names_from  = paper_code,
+        values_from = c(unposted_final_grade, unposted_final_score),
+        names_glue  = "{paper_code}_{.value}"
+      ) %>%
+      # Clean column names: turn ..._unposted_final_grade into ..._grade
+      rename_with(
+        ~ str_replace(.x, "_unposted_final_grade$", "_grade"),
+        ends_with("unposted_final_grade")
+      ) %>%
+      rename_with(
+        ~ str_replace(.x, "_unposted_final_score$", "_score"),
+        ends_with("unposted_final_score")
+      )
+    
+    # Reorder UG grade/score columns by paper number
+    ug_paper_order <- ug_long %>%
+      distinct(paper_code, paper_num) %>%
+      arrange(paper_num) %>%
+      pull(paper_code)
+    
+    ug_grade_cols <- paste0(ug_paper_order, "_grade")
+    ug_score_cols <- paste0(ug_paper_order, "_score")
+    
+    ug_cols_order <- c(
+      "student_id",
+      "student_name",
+      ug_grade_cols,
+      ug_score_cols
+    )
+    
+    ug_wide <- ug_wide %>%
+      select(any_of(ug_cols_order))
+  } else {
+    # If no UG papers, return an empty tibble with no rows
+    ug_wide <- tibble()
+  }
+  
+  # ----- Build PG wide (if there are any PG rows) -----
+  if (nrow(pg_long) > 0) {
+    pg_wide <- pg_long %>%
+      select(
+        student_id,
+        student_name,
+        paper_code,
+        unposted_final_grade,
+        unposted_final_score
+      ) %>%
+      pivot_wider(
+        id_cols     = c(student_id, student_name),
+        names_from  = paper_code,
+        values_from = c(unposted_final_grade, unposted_final_score),
+        names_glue  = "{paper_code}_{.value}"
+      ) %>%
+      rename_with(
+        ~ str_replace(.x, "_unposted_final_grade$", "_grade"),
+        ends_with("unposted_final_grade")
+      ) %>%
+      rename_with(
+        ~ str_replace(.x, "_unposted_final_score$", "_score"),
+        ends_with("unposted_final_score")
+      )
+    
+    pg_paper_order <- pg_long %>%
+      distinct(paper_code, paper_num) %>%
+      arrange(paper_num) %>%
+      pull(paper_code)
+    
+    pg_grade_cols <- paste0(pg_paper_order, "_grade")
+    pg_score_cols <- paste0(pg_paper_order, "_score")
+    
+    pg_cols_order <- c(
+      "student_id",
+      "student_name",
+      pg_grade_cols,
+      pg_score_cols
+    )
+    
+    pg_wide <- pg_wide %>%
+      select(any_of(pg_cols_order))
+  } else {
+    pg_wide <- tibble()
+  }
+  
+  # Return both tables as a list
+  list(
+    ug_wide = ug_wide,
+    pg_wide = pg_wide
+  )
+}
+
+```
+
+
+```{r shiny_app, echo=FALSE}
+# This chunk defines and runs the Shiny app.
+
+# --------------------------
+# 1. Define the UI (front-end)
+# --------------------------
+ui <- fluidPage(
+  shinyjs::useShinyjs(),
+  
+  tags$head(
+  tags$script(HTML("
+    $(document).on('keypress', '#paper_suffix', function(e) {
+      if (e.which === 13) {   // 13 = Enter
+        $('#btn_combine').click();
+      }
+    });
+  "))
+),
+
+  # ---------------------------------------------------------------
+  titlePanel("Grade Upload & Integration Tool"),
+  # ---------------------------------------------------------------
+  
+  # IMPORTANT NOTE AT THE TOP
+  helpText("You can add multiple papers. Raw files are not saved; only cleaned data in memory."),
+  
+  sidebarLayout(
+    
+    # ============================
+    # Sidebar
+    # ============================
+    sidebarPanel(
+      
+      # Step 1: upload raw file
+      fileInput(
+        inputId = "grades_file",
+        label   = "Upload Canvas grade file",
+        accept  = c(".csv", ".xls", ".xlsx")
+      ),
+      
+      # Step 2.1: paper prefix
+      selectInput(
+        inputId = "paper_prefix",
+        label   = "Paper category",
+        choices = c("MEDSCI", "CLINIMAG", "MEDIMAGE", "PHARMACOL", "PHYSIOL", "BIOMED")
+      ),
+      
+      # Step 2.2: paper suffix (e.g., 201, 303AB, 729)
+      textInput(
+        inputId = "paper_suffix",
+        label   = "Paper code (e.g. 201, 303AB, 729)",
+        value   = ""
+      ),
+      
+      # Step 3: merge into ETL
+      actionButton("btn_combine", "Combine into ETL"),
+      
+      br(), br(),
+      
+      # ---------------------------------------------------------
+      # NEW: Remove-paper feature
+      # ---------------------------------------------------------
+      selectInput(
+        inputId = "paper_to_remove",
+        label   = "Remove a paper from ETL",
+        choices = character(0)   # Will be updated dynamically
+      ),
+      
+      actionButton("btn_remove_paper", "Remove selected paper from ETL")
+      
+    ),
+    
+    # ============================
+    # Main Panel
+    # ============================
+    mainPanel(
+      
+      tabsetPanel(
+        
+        # ---------------------------------------------------------
+        # TAB 1: Current ETL
+        # ---------------------------------------------------------
+        tabPanel(
+          title = "Uploaded Papers",
+          
+          h4("Current Paper List"),
+          tableOutput("paper_list"),
+          
+          h4("Current master grades (last 10 rows)"),
+          tableOutput("preview_master")
+        ),
+        
+        # ---------------------------------------------------------
+        # TAB 2: Downloads & Reports
+        # ---------------------------------------------------------
+        tabPanel(
+          title = "Downloads & Reports",
+          
+          br(),
+          h4("Download combined data"),
+          
+          # WIDE UG + WIDE PG files
+          downloadButton("download_ug_wide", "Download UG wide (Excel)"),
+          downloadButton("download_pg_wide", "Download PG wide (Excel)"),
+          
+          br(), br(),
+          h4("BoE / BoS Analysis Report"),
+          
+          actionButton("btn_prepare_pdf", "Prepare analysis report"),
+          downloadButton("download_pdf", "Download analysis report (PDF)")
+        )
+      ),  # end tabsetPanel
+    ) # end mainPanel
+  ) # end sidebarLayout
+) # end fluidPage
+
+```
+
+
+```{r}
+
+# -----------------------------
+# 2. Define the server (back-end)
+# -----------------------------
+server <- function(input, output, session) {
+  
+  # Reactive value to store the master ETL (all uploaded papers combined).
+  # It starts as an empty tibble with the right columns.
+  all_grades <- reactiveVal(
+    tibble(
+      paper_code           = character(),
+      student_name         = character(),
+      student_id           = character(),
+      unposted_final_score = double(),
+      unposted_final_grade = character()
+    )
+  )
+  
+  # Build the full paper_code from prefix + suffix, e.g. "MEDIMAGE_305"
+  paper_code_reactive <- reactive({
+    req(input$paper_prefix, input$paper_suffix)
+    suffix <- toupper(trimws(input$paper_suffix))      # clean suffix
+    paste0(input$paper_prefix, "_", suffix)            # combine with underscore
+  })
+  
+  # When user clicks "Combine into ETL":
+  observeEvent(input$btn_combine, {
+  req(input$grades_file)                             # ensure a file is uploaded
+  
+  code <- paper_code_reactive()                      # e.g. "MEDSCI_201"
+  path <- input$grades_file$datapath                 # temporary path for uploaded file
+  
+  # Try to process this one file; catch any errors
+  new_df <- tryCatch(
+    {
+      process_one_file(path, code)
+    },
+    error = function(e) {
+      # Big, obvious popup
+      shiny::showModal(
+        shiny::modalDialog(
+          title = "File not added",
+          shiny::tagList(
+            shiny::p(
+              "The uploaded file could not be added for",
+              shiny::strong(code), "."
+            ),
+            shiny::p(
+              "Reason: ",
+              shiny::code(conditionMessage(e))
+            ),
+            shiny::p("Your existing ETL has NOT been changed.")
+          ),
+          easyClose = TRUE,
+          footer = shiny::modalButton("OK")
+        )
+      )
+      
+      # (Optional) subtle toast notification as well
+      shiny::showNotification(
+        paste("File for", code, "was not added - see details in the dialog."),
+        type = "error",
+        duration = 10
+      )
+      
+      NULL  # return NULL so we know it failed
+    }
+  )
+  
+  # If processing failed, just exit quietly - ETL unchanged
+  if (is.null(new_df)) return()
+  
+  # If processing succeeded, you can either overwrite same paper_code
+  # or just append. This version OVERWRITES existing rows for the same paper:
+  df_current <- all_grades()
+  
+  updated <- df_current %>%
+    dplyr::filter(paper_code != code) %>%
+    dplyr::bind_rows(new_df) %>%
+    dplyr::distinct()
+  
+  all_grades(updated)
+})
+
+
+  
+  # ---------------------------
+  # NEW: update "paper_to_remove" dropdown
+  # ---------------------------
+  observe({
+    # Get current ETL
+    df <- all_grades()
+    
+    # Find all unique paper codes currently in the ETL
+    codes <- df %>%
+      distinct(paper_code) %>%
+      arrange(paper_code) %>%
+      pull(paper_code)
+    
+    # Update the selectInput choices
+    updateSelectInput(
+      session,
+      inputId = "paper_to_remove",
+      choices = codes
+    )
+  })
+  
+  # ---------------------------
+  # NEW: remove selected paper from ETL
+  # ---------------------------
+  observeEvent(input$btn_remove_paper, {
+    req(input$paper_to_remove)   # make sure a paper is chosen
+    
+    df_current <- all_grades()
+    
+    # Filter out all rows matching the selected paper_code
+    df_new <- df_current %>%
+      filter(paper_code != input$paper_to_remove)
+    
+    # Store the updated ETL back into the reactiveVal
+    all_grades(df_new)
+  })
+  
+  # Show first 10 rows of the current master ETL
+  output$preview_master <- renderTable({
+    tail(all_grades(), 10)
+  })
+  
+  # Show list of papers currently in ETL (multi-column layout)
+  output$paper_list <- renderTable({
+    # Get unique sorted codes as a vector
+    codes <- all_grades() %>%
+      distinct(paper_code) %>%
+      arrange(paper_code) %>%
+      pull(paper_code)
+    
+    if (length(codes) == 0) return(NULL)
+    
+    # Number of columns you want in the UI
+    n_cols <- 5  # change to 3, 4 etc if prefer
+    
+    # Pad with "" so length is a multiple of n_cols
+    if (length(codes) %% n_cols != 0) {
+      pad <- n_cols - (length(codes) %% n_cols)
+      codes <- c(codes, rep("", pad))
+    }
+    
+    # Fill by row so it goes left → right, then down
+    mat <- matrix(codes, ncol = n_cols, byrow = TRUE)
+    
+    # Drop column names / row names for a clean look
+    colnames(mat) <- NULL
+    mat
+  }, rownames = FALSE,
+  colnames = FALSE )
+  
+  
+  # -----------------------------
+  # Downloads: long, UG-wide, PG-wide
+  # -----------------------------
+  
+  # 1) Long format ETL (as Excel)
+  output$download_etl_long <- downloadHandler(
+    filename = function() {
+      "master_grades_long.xlsx"
+    },
+    content = function(file) {
+      df <- all_grades()
+      writexl::write_xlsx(df, path = file)
+    }
+  )
+  
+  # 2) UG wide
+  output$download_ug_wide <- downloadHandler(
+    filename = function() {
+      "master_grades_UG_wide.xlsx"
+    },
+    content = function(file) {
+      df_long <- all_grades()
+      if (nrow(df_long) == 0L) {
+        # If nothing is in ETL, write an empty sheet
+        writexl::write_xlsx(tibble(note = "No data in ETL yet."), path = file)
+      } else {
+        # Build unique long table and UG/PG wide tables
+        grades_long_unique <- make_grades_long_unique(df_long)
+        wide_list <- make_ug_pg_wide(grades_long_unique)
+        ug_wide <- wide_list$ug_wide
+        
+        # If there are no UG papers, write a message instead
+        if (nrow(ug_wide) == 0L) {
+          writexl::write_xlsx(tibble(note = "No UG papers in this ETL."), path = file)
+        } else {
+          writexl::write_xlsx(ug_wide, path = file)
+        }
+      }
+    }
+  )
+  
+  # 3) PG wide
+  output$download_pg_wide <- downloadHandler(
+    filename = function() {
+      "master_grades_PG_wide.xlsx"
+    },
+    content = function(file) {
+      df_long <- all_grades()
+      if (nrow(df_long) == 0L) {
+        writexl::write_xlsx(tibble(note = "No data in ETL yet."), path = file)
+      } else {
+        grades_long_unique <- make_grades_long_unique(df_long)
+        wide_list <- make_ug_pg_wide(grades_long_unique)
+        pg_wide <- wide_list$pg_wide
+        
+        if (nrow(pg_wide) == 0L) {
+          writexl::write_xlsx(tibble(note = "No PG papers in this ETL."), path = file)
+        } else {
+          writexl::write_xlsx(pg_wide, path = file)
+        }
+      }
+    }
+  )
+  
+  # -----------------------------
+  # Prepare and download analysis PDF
+  # -----------------------------
+  # We assume there is another Rmd file in the same folder called:
+  #   "grade_analysis_report.Rmd"
+  # that expects `params$data_path` and reads all_grades via readRDS().
+  
+  # This button doesn't need to do anything by itself, but we keep it so
+  # the user explicitly clicks "Prepare" before downloading.
+  observeEvent(input$btn_prepare_pdf, {
+    # You could add a notification here if you like, but it's optional.
+  })
+  
+  output$download_pdf <- downloadHandler(
+    filename = function() {
+      "BoE_BoS_Grade Analysis Report.pdf"
+    },
+    content = function(file) {
+      # 1. Save the current ETL (long format) to a temporary .rds file
+      tmp_rds <- tempfile(fileext = ".rds")
+      saveRDS(all_grades(), tmp_rds)
+      
+      # 2. Render the analysis Rmd to a temporary PDF file
+      tmp_pdf <- tempfile(fileext = ".pdf")
+      
+      rmarkdown::render(
+        input       = "grade_analysis_report.Rmd",  # File 2 name
+        output_file = tmp_pdf,
+        params      = list(data_path = tmp_rds),
+        envir       = new.env(parent = globalenv())
+      )
+      
+      # 3. Copy the generated PDF to the `file` path that Shiny provides
+      file.copy(tmp_pdf, file, overwrite = TRUE)
+    }
+  )
+}
+
+options(shiny.launch.browser = TRUE)
+# --------------------------
+# 3. Run the Shiny app
+# --------------------------
+shinyApp(ui = ui, server = server, options = list(width = 1080, height = 1080))
+
+```
