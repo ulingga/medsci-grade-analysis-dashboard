@@ -58,7 +58,7 @@ install.packages(c(
   "ggplot2", "purrr", "tibble", "shinyjs", "rmarkdown"
 ))
 
-# For PDF output (LaTeX)
+# If you are a PC user, for PDF output (LaTeX)
 install.packages("tinytex")
 tinytex::install_tinytex()
 ```
@@ -73,7 +73,7 @@ rmarkdown::run("shiny/boe_bos_shiny_app.Rmd")
 
 Then:
 
-- Upload one or more Canvas grade exports (`.csv`, `.xls`, `.xlsx`).  
+- Upload Canvas grade exports one by one (`.csv`, `.xls`, `.xlsx`).  
 - For each file, specify the `paper_code` using the prefix + suffix controls  
   (e.g. `MEDSCI` + `318` → `MEDSCI_318`).  
 - Click **Combine into ETL** to build the master table.  
@@ -148,7 +148,7 @@ If used in academic reporting or internal documentation, please cite as:
 
 ## 7. Getting Support
 
-At this stage, the SMS Grade Analysis Dashboard is not yet supported by School IT.  
+At this stage, the SMS Grade Analysis Dashboard is not yet supported by the University IT.  
 For unexpected behaviour, error messages, or questions about interpretation, please contact:
 
 - **Emily Li** (Developer)
