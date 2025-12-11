@@ -65,7 +65,9 @@ tinytex::install_tinytex()
 
 ### 2.2. Run the Shiny App
 
-From the project root in RStudio:
+1. Open RStudio.
+2. Click **File → Open Project…** and select `SMS Grade Analysis.Rproj`.
+3. Once RStudio opens the project, copy and paste this into the Console and click **Enter**:
 
 ```r
 rmarkdown::run("shiny/boe_bos_shiny_app.Rmd")
